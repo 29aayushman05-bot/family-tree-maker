@@ -12,24 +12,38 @@ import io
 import os
 import tempfile
 
+
+
 def get_default_avatar_for_pdf():
     """Load default avatar from assets for PDF"""
-    avatar_path = os.path.join('assets', 'default_avatar.png')
+    # Try multiple possible paths
+    possible_paths = [
+        os.path.join('assets', 'default_avatar.png'),
+        os.path.join('assets', 'default_avatar.jpg'),
+        'assets/default_avatar.png',
+        'assets/default_avatar.jpg'
+    ]
     
-    if os.path.exists(avatar_path):
-        try:
-            with open(avatar_path, 'rb') as f:
-                return f.read()
-        except:
-            pass
+    for avatar_path in possible_paths:
+        if os.path.exists(avatar_path):
+            try:
+                with open(avatar_path, 'rb') as f:
+                    return f.read()
+            except Exception as e:
+                print(f"Error loading {avatar_path}: {e}")
+                continue
+    
+    print("Warning: No default avatar found in assets folder")
     return None
+
+
 
 def create_circular_image_simple(image_bytes, size=70):
     """Create circular image - save as temp file for reportlab"""
     try:
         # Open and resize
         img = Image.open(io.BytesIO(image_bytes))
-        img = img.convert('RGB')  # No alpha channel
+        img = img.convert('RGB')
         img = img.resize((size, size), Image.Resampling.LANCZOS)
         
         # Create circular mask
@@ -37,18 +51,18 @@ def create_circular_image_simple(image_bytes, size=70):
         draw = ImageDraw.Draw(mask)
         draw.ellipse((0, 0, size, size), fill=255)
         
-        # Apply mask by creating white background
+        # Apply mask
         output = Image.new('RGB', (size, size), (255, 255, 255))
         output.paste(img, (0, 0))
         
-        # Apply circular mask by making corners white
+        # Make corners white (circular mask)
         for x in range(size):
             for y in range(size):
                 dist = ((x - size/2)**2 + (y - size/2)**2)**0.5
                 if dist > size/2:
                     output.putpixel((x, y), (255, 255, 255))
         
-        # Save to temp file (reportlab prefers files)
+        # Save to temp file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
         output.save(temp_file.name, 'JPEG', quality=95)
         temp_file.close()
@@ -57,6 +71,8 @@ def create_circular_image_simple(image_bytes, size=70):
     except Exception as e:
         print(f"Error creating circular image: {e}")
         return None
+
+
 
 def export_tree_to_pdf_visual(tree_data):
     """Export family tree as visual PDF with images"""
@@ -141,14 +157,13 @@ def export_tree_to_pdf_visual(tree_data):
     # Draw nodes
     node_radius = 35 * scale
     default_avatar_bytes = get_default_avatar_for_pdf()
-    temp_files = []  # Track temp files for cleanup
+    temp_files = []
     
     for node in person_nodes:
         x, y = transform_point(node.get('x', 0), node.get('y', 0))
         name = node.get('name', 'Unknown')
-        date = node.get('date', '')
         
-        # Get image
+        # Get image - prioritize user photo, fallback to default avatar
         image_bytes = None
         photo_b64 = node.get('photo')
         
@@ -158,16 +173,17 @@ def export_tree_to_pdf_visual(tree_data):
             except:
                 pass
         
-        if not image_bytes and default_avatar_bytes:
+        # Use default avatar if no photo
+        if not image_bytes:
             image_bytes = default_avatar_bytes
         
-        # Draw white circle background first
+        # Draw white circle background
         c.setFillColor(white)
         c.setStrokeColor(black)
-        c.setLineWidth(0.5)
+        c.setLineWidth(3)
         c.circle(x, y, node_radius, fill=1, stroke=1)
         
-        # Try to draw image
+        # Draw image (either user photo or default avatar)
         if image_bytes:
             temp_image_path = create_circular_image_simple(image_bytes, int(node_radius * 2))
             if temp_image_path:
@@ -183,7 +199,7 @@ def export_tree_to_pdf_visual(tree_data):
                     )
                     # Redraw circle border
                     c.setStrokeColor(black)
-                    c.setLineWidth(0.5)
+                    c.setLineWidth(3)
                     c.circle(x, y, node_radius, fill=0, stroke=1)
                 except Exception as e:
                     print(f"Error drawing image for {name}: {e}")
@@ -191,12 +207,14 @@ def export_tree_to_pdf_visual(tree_data):
             else:
                 draw_initial(c, x, y, node_radius, name)
         else:
+            # Only show initial if everything failed (rare)
             draw_initial(c, x, y, node_radius, name)
         
-        # Draw name and date WITH BACKGROUND BOX
-        c.setFont("Helvetica", max(8, int(10 * scale)))
+        # Draw name with background box
+        font_size = max(8, int(10 * scale))
+        c.setFont("Helvetica", font_size)
         
-        # Prepare text
+        # Prepare text lines
         text_lines = []
         if len(name) > 15:
             words = name.split()
@@ -219,39 +237,29 @@ def export_tree_to_pdf_visual(tree_data):
         if date_range:
             text_lines.append(date_range)
         
-        # Calculate background box size
-        max_text_width = max(c.stringWidth(line, "Helvetica", max(8, int(10 * scale))) for line in text_lines)
-        box_width = max_text_width + 10
-        box_height = len(text_lines) * 12 * scale + 8
+        # Calculate background box size - FIXED POSITIONING
+        max_text_width = max(c.stringWidth(line, "Helvetica", font_size) for line in text_lines)
+        box_width = max_text_width + 12
+        line_height = 13 * scale
+        box_height = len(text_lines) * line_height + 8
         box_x = x - box_width / 2
-        box_y = y - node_radius - 15 * scale - box_height + 8
+        box_y = y - node_radius - 18 * scale - box_height
         
-        # Draw semi-transparent white background
-        c.setFillColorRGB(1, 1, 1, alpha=0.9)  # White with 90% opacity
+        # Draw white background box with border
+        c.setFillColor(white)
         c.setStrokeColor(black)
         c.setLineWidth(1)
         c.roundRect(box_x, box_y, box_width, box_height, 3, fill=1, stroke=1)
         
-        # Draw text on top
+        # Draw text on top - FIXED Y OFFSET
         c.setFillColor(black)
-        y_offset = y - node_radius - 15 * scale
+        y_offset = y - node_radius - 18 * scale - box_height + line_height - 2
         for i, line in enumerate(text_lines):
             if i == len(text_lines) - 1 and date_range and line == date_range:
                 c.setFont("Helvetica", max(7, int(8 * scale)))
-            c.drawCentredString(x, y_offset - i * 12 * scale, line)
-
-        
-              # Draw date range (backward compatible)
-        from utils.data_handler import format_date_range
-        birth = node.get('birth_date', node.get('date', ''))
-        death = node.get('death_date', '')
-        date_range = format_date_range(birth, death)
-
-        
-        if date_range:
-            c.setFont("Helvetica", max(7, int(8 * scale)))
-            c.drawCentredString(x, y - node_radius - 30 * scale, date_range)
-
+            else:
+                c.setFont("Helvetica", font_size)
+            c.drawCentredString(x, y_offset - i * line_height, line)
     
     # Footer
     c.setFont("Helvetica", 10)
@@ -270,12 +278,16 @@ def export_tree_to_pdf_visual(tree_data):
     pdf_buffer.seek(0)
     return pdf_buffer.getvalue()
 
+
+
 def draw_initial(c, x, y, radius, name):
     """Draw initial letter fallback"""
     initial = name[0].upper() if name else '?'
     c.setFont("Helvetica-Bold", int(radius * 0.6))
     c.setFillColor(black)
     c.drawCentredString(x, y - radius * 0.2, initial)
+
+
 
 def export_tree_to_pdf_list(tree_data):
     """Fallback text list export"""
